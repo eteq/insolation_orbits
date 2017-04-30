@@ -12,7 +12,8 @@ sun.luminance = cnst.L_sun / sun.luminosity
 
 _J2017 = time.Time('J2017')
 ec = earth_orientation.eccentricity(_J2017.jd)
-obliq = earth_orientation.obliquity(_J2017.jd)
+obliq = earth_orientation.obliquity(_J2017.jd)*u.deg
+sidday = 23.9344699*u.hr
 
-earth = OrbitingSphericalBody(cnst.R_earth, 0, cnst.M_earth, obliq,
+earth = OrbitingSphericalBody(cnst.R_earth, 0, cnst.M_earth, obliq, sidday,
                               1*u.AU, ec, 0*u.deg, sun)
