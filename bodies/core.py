@@ -1,19 +1,22 @@
 import abc
 
 import numpy as np
+from scipy import integrate
 
 from astropy import units as u
 from astropy import constants as cnst
 from astropy.coordinates import (CartesianRepresentation,
                                  SphericalRepresentation,
-                                 UnitSphericalRepresentation)
+                                 UnitSphericalRepresentation,
+                                 matrix_utilities)
 
+TWOPI = 2*np.pi
 
 class Body:
     __metaclass__ = abc.ABCMeta
 
-    def __init__(self, surface_area, luminance, mass):
-        self.luminance = luminance  # power / area / solid angle
+    def __init__(self, surface_area, radiance, mass):
+        self.radiance = radiance  # power / area / solid angle
         self.surface_area = surface_area
         self.mass = mass
 
@@ -27,7 +30,7 @@ class Body:
 
     @property
     def intensity(self):
-        return self.luminance * self.surface_area
+        return self.radiance * self.surface_area
 
     @abc.abstractproperty
     def luminosity(self):
@@ -35,9 +38,9 @@ class Body:
 
 
 class SphericalBody(Body):
-    def __init__(self, radius, luminance, mass, obliquity=0*u.deg,
+    def __init__(self, radius, radiance, mass, obliquity=0*u.deg,
                  rotation_period=0*u.second):
-        super().__init__(0, luminance, mass)
+        super().__init__(0, radiance, mass)
         self.radius = radius
         self.obliquity = obliquity
         try:
@@ -57,20 +60,54 @@ class SphericalBody(Body):
     def luminosity(self):
         return self.intensity * 4 * np.pi
 
-    def surface_flux(self, lat, lon, source):
-        surface_normal = UnitSphericalRepresentation(lon=lon + self.rotation_angle,
-                                                     lat=lat + self.obliquity)
+    def surface_normal(self, lat, lon):
+        usr = UnitSphericalRepresentation(lon=lon+self.rotation_angle, lat=lat)
+        rotm = matrix_utilities.rotation_matrix(self.obliquity, axis='x')
+        return usr.to_cartesian().transform(rotm)
 
-        source_normal = (self.loc - source.loc).represent_as(UnitSphericalRepresentation)
+    def surface_flux(self, lat, lon, source='parent'):
+        if source == 'parent':
+            source = self.parent_body
 
-        return surface_normal, source_normal
+        source_vector = source.loc - self.loc
+        dsource = source_vector.represent_as(SphericalRepresentation).distance
+        source_normal = source_vector.represent_as(UnitSphericalRepresentation)
+
+        fluxfraction = self.surface_normal(lat, lon).dot(source_normal)
+        fluxfraction[fluxfraction < 0] = 0
+
+        return fluxfraction * source.intensity * (dsource**-2 * u.sr)
+
+    def average_surface_flux(self, lat, lon, source='parent',
+                             timespan='rotation'):
+        if timespan == 'rotation':
+            timespan = self.rotation_period
+
+        hadt = hasattr(self, 't')
+        oldt = getattr(self, 't', 0*u.second)
+        try:
+            def fint(tfrac):
+                self.t = oldt + tfrac * timespan
+                return self.surface_flux(lat, lon, source).value
+
+            fluxu = self.surface_flux(lat, lon, source).unit
+            return integrate.quad(fint, -0.5, 0.5)[0] * fluxu
+        finally:
+            if hadt:
+                self.t = oldt
+
 
     @property
     def rotation_angle(self):
-        return 2*np.pi*(self.t/self.rotation_period)*u.radian
+        return TWOPI*(self.t/self.rotation_period)*u.radian
 
 
 class OrbitingMixin:
+    """
+    Mixin class for a smaller body orbiting a larger one.
+
+    Note that this assumes M_self << M_parent !
+    """
     def __init__(self, semimajor, eccentricity, inclination, parent_body,
                  phase0=0*u.deg):
         self.semimajor = semimajor
@@ -94,9 +131,12 @@ class OrbitingMixin:
         return numer/denom
 
     @property
+    def orbital_period(self):
+        return TWOPI*(self.semimajor**3/self.grav_mu)**0.5
+
+    @property
     def theta(self):
-        periodo2pi = (self.semimajor**3/self.grav_mu)**0.5
-        return (self.t / periodo2pi)*u.radian
+        return (self.t / self.orbital_period)*TWOPI*u.radian
 
     @property
     def loc(self):
@@ -107,16 +147,17 @@ class OrbitingMixin:
 
 
 class OrbitingSphericalBody(SphericalBody, OrbitingMixin):
-    def __init__(self, radius, luminance, mass, obliquity, rotation_period,
+    def __init__(self, radius, radiance, mass, obliquity, rotation_period,
                  semimajor, eccentricity, inclination, parent_body):
-        SphericalBody.__init__(self, radius, luminance, mass,
+        SphericalBody.__init__(self, radius, radiance, mass,
                                obliquity=obliquity,
                                rotation_period=rotation_period)
         OrbitingMixin.__init__(self, semimajor, eccentricity, inclination,
                                parent_body)
 
 
-def plot_bodies(bodies, t=0*u.second, ax=None, unit=None, **kwargs):
+def plot_bodies(bodies, t=0*u.second, ax=None, unit=None,
+                alwaysscatter=False, **kwargs):
     from matplotlib import pyplot as plt
 
     if ax is None:
@@ -133,8 +174,8 @@ def plot_bodies(bodies, t=0*u.second, ax=None, unit=None, **kwargs):
             x = l.x
             y = l.y
             z = l.z
-        if l.x.isscalar:
-            ax.scatter3D(x, y, z, **kwargs)
+        if l.x.isscalar or alwaysscatter:
+            res = ax.scatter3D(x, y, z, **kwargs)
         else:
-            ax.plot3D(b.loc.x, b.loc.y, b.loc.z, **kwargs)
-    return ax
+            res = ax.plot3D(x, y, z, **kwargs)
+    return ax, res

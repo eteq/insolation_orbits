@@ -7,8 +7,8 @@ from astropy import constants as cnst
 from astropy.coordinates import earth_orientation
 
 sun = SphericalBody(cnst.R_sun, 1, cnst.M_sun)
-# sneaky trick to use L_sun to compute luminance
-sun.luminance = cnst.L_sun / sun.luminosity
+# sneaky trick to use L_sun to compute radiance
+sun.radiance = cnst.L_sun / sun.luminosity / u.sr
 
 _J2017 = time.Time('J2017')
 ec = earth_orientation.eccentricity(_J2017.jd)
