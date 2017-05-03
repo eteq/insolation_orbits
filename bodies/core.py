@@ -79,21 +79,37 @@ class SphericalBody(Body):
         return fluxfraction * source.intensity * (dsource**-2 * u.sr)
 
     def average_surface_flux(self, lat, lon, source='parent',
-                             timespan='rotation'):
+                             timespan='rotation', t0=None,
+                             nsamples=None):
+        """
+        Compute the average flux at a point on the surface
+
+        `nsamples` == None means use the scipy integrate function instead of
+        numerically estimating.
+        """
         if timespan == 'rotation':
             timespan = self.rotation_period
 
-        hadt = hasattr(self, 't')
-        oldt = getattr(self, 't', 0*u.second)
-        try:
-            def fint(tfrac):
-                self.t = oldt + tfrac * timespan
-                return self.surface_flux(lat, lon, source).value
+        if t0 is None:
+            t0 = self.t
+            if not hasattr(t0, 'isscalar') or not t0.isscalar:
+                raise ValueError("cannot set t0 because self.t is not a scalar")
 
-            fluxu = self.surface_flux(lat, lon, source).unit
-            return integrate.quad(fint, -0.5, 0.5)[0] * fluxu
+        oldt = getattr(self, 't', 'not_present')
+        try:
+            if nsamples is None:
+                def fint(tfrac):
+                    self.t = t0 + tfrac * timespan
+                    return self.surface_flux(lat, lon, source).value
+
+                fluxu = self.surface_flux(lat, lon, source).unit
+                return integrate.quad(fint, -0.5, 0.5)[0] * fluxu
+            else:
+                self.t = np.linspace(-0.5*timespan + t0, 0.5*timespan + t0, nsamples)
+                flux = self.surface_flux(lat, lon, source)
+                return flux.mean()
         finally:
-            if hadt:
+            if oldt != 'not_present':
                 self.t = oldt
 
 
